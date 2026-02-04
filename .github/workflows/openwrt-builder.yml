@@ -27,7 +27,7 @@ on:
       repository_branch:
         description: '分支'
         required: false
-        default: 'openwrt-24.10'
+        default: 'openwrt-25.12'
       enable_ssh:
         description: 'Enable SSH debugging?'
         type: boolean
