@@ -1,78 +1,92 @@
-# 注意规则在满足自己需求情况下，尽量做到精简，不要过度复杂，以免影响性能。
-# 机场订阅
+# =====================================================================
+# Mihomo (Clash Meta) 高阶配置模板
+# 架构特性: TUN (System 堆栈) + Fake-IP (Rule模式) + 全局 Sniffer 嗅探
+# =====================================================================
+
+# ---------------------------------------------------
+# 1. 机场订阅与节点获取
+# ---------------------------------------------------
 proxy-providers:
   ikuuu:
-    url: ""
+    url: "你的真实订阅链接填这里"  # ⚠️ 务必填入，为空会导致内核启动崩溃
     type: http
-    interval: 86400
+    interval: 86400              # 每 24 小时自动更新
     health-check:
       enable: true
       url: https://www.gstatic.com/generate_204
-      interval: 300
-    override:
-      client-fingerprint: chrome
+      interval: 300              # 每 5 分钟进行一次可用性测试
+    override:                    # 💡 [关键优化] 将指纹强制注入到所有订阅节点中
+      client-fingerprint: chrome # 解决 global-client-fingerprint 弃用警告，绕过 TLS 审查
 
-# 节点信息
-proxies: []
-
-# 全局配置 
-mixed-port: 7890
-allow-lan: true
+# ---------------------------------------------------
+# 2. 本地服务与基础设置
+# ---------------------------------------------------
+proxies: []                  # 节点由 providers 提供，此处留空，系统自带 DIRECT 和 REJECT 策略
+mixed-port: 7890             # 💡 [精简] 仅保留混合端口(HTTP/SOCKS5)，收敛监听资源
+allow-lan: true              # 允许局域网设备接入 (旁路由核心参数)
 bind-address: "*"
 ipv6: false
 unified-delay: true
-tcp-concurrent: true
-log-level: warning
-find-process-mode: 'off'
+tcp-concurrent: true         # 开启 TCP 并发，提升网页加载速度
+log-level: warning           # 日常建议保持 warning，减少磁盘 IO
+find-process-mode: 'off'     # 旁路由环境不需要查找本机进程，设为 off 节省性能
 keep-alive-idle: 600
 keep-alive-interval: 15
 disable-keep-alive: false
 profile:
-  store-selected: true
-  store-fake-ip: true
+  store-selected: true       # 记忆手动选择的节点
+  store-fake-ip: true        # 💡 [防断网] 记忆 Fake-IP 映射，防止服务重启后 DNS 缓存错乱导致断网
 
-# 控制面板
+# ---------------------------------------------------
+# 3. Web UI 控制面板
+# ---------------------------------------------------
 external-controller: 0.0.0.0:9090
 secret: ""
 external-ui: ui/zashboard
 external-ui-name: zashboard
 external-ui-url: "https://github.com/Zephyruso/zashboard/archive/refs/heads/gh-pages.zip"
 
-# 嗅探 
+# ---------------------------------------------------
+# 4. 流量嗅探 (Sniffer) - 解决 App 不发域名发 IP 的问题
+# ---------------------------------------------------
 sniffer:
-  enable: true
+  enable: true               # 💡 [关键优化] 开启嗅探，提升分流准确率
   sniff:
     HTTP:
       ports: [80, 8080-8880]
-      override-destination: true
+      override-destination: true  # 强制用嗅探到的域名替换原始 IP 去匹配 rules
     TLS:
       ports: [443, 8443]
     QUIC:
       ports: [443, 8443]
   force-domain:
-    - "+.v2ex.com"
+    - "+.v2ex.com"           # 强制嗅探极易被 DNS 污染或使用复杂 CDN 的域名
   skip-domain:
-    - "rule-set:private_domain"
-    - "rule-set:cn_domain"
+    - "rule-set:private_domain"   # 💡 [性能优化] 局域网内网流量跳过嗅探，直接放行
+    - "rule-set:cn_domain"        # 💡 [性能优化] 国内流量跳过嗅探，防死锁卡顿
 
-# 入站 
+# ---------------------------------------------------
+# 5. TUN 虚拟网卡 (接管底层 Linux 流量)
+# ---------------------------------------------------
 tun:
   enable: true
-  stack: system
-  auto-route: true
+  stack: system              # 💡 [关键优化] 使用 system 底层协议栈，性能损耗最低 (注意：改动此项需重启服务器清空网卡缓存)
+  auto-route: true           # 自动配置本机路由表接管流量
   auto-redirect: false
   auto-detect-interface: true
-  dns-hijack: []
+  dns-hijack: []             # 配合 Fake-IP 使用时，留空即可
 
-# DNS模块
+# ---------------------------------------------------
+# 6. DNS 引擎 (Fake-IP 模式)
+# ---------------------------------------------------
 dns:
   enable: true
-  listen: 0.0.0.0:1053
+  listen: 0.0.0.0:1053       # 上游 DNS 监听端口 (供主路由或 AdGuard 转发使用)
   ipv6: false
   respect-rules: true
-  enhanced-mode: fake-ip
+  enhanced-mode: fake-ip     # 返回 198.18.x.x 虚拟 IP
   fake-ip-range: 198.18.0.1/16
-  fake-ip-filter-mode: rule
+  fake-ip-filter-mode: rule  # 💡 [高级特性] 仅为国外域名返回虚假 IP，国内直连
   fake-ip-filter:
     - RULE-SET,gfw_domain,fake-ip
     - RULE-SET,ai,fake-ip
@@ -84,8 +98,8 @@ dns:
     - RULE-SET,tiktok_domain,fake-ip
     - RULE-SET,mega_domain,fake-ip
     - RULE-SET,ehentai_domain,fake-ip
-    - RULE-SET,cn_domain,real-ip
-    - MATCH,real-ip
+    - RULE-SET,cn_domain,real-ip  # 国内域名返回真实 IP
+    - MATCH,real-ip               # 兜底返回真实 IP
   default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
@@ -96,7 +110,9 @@ dns:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
 
-# 出站策略 
+# ---------------------------------------------------
+# 7. 出站策略组 (已将自定义的"直连"替换为内核级 DIRECT)
+# ---------------------------------------------------
 proxy-groups:
   - {name: 🚀 默认代理, type: select, proxies: [♻️ 香港智能, 🔯 香港故转, 🔯 日本故转, 🔯 狮城故转, 🔯 美国故转, ♻️ 日本智能, ♻️ 狮城智能, ♻️ 美国智能, ♻️ 自动选择, 🇭🇰 香港节点, 🇯🇵 日本节点, 🇸🇬 狮城节点, 🇺🇲 美国节点, 🌐 全部节点, DIRECT]}
   - {name: 📹 YouTube, type: select, proxies: [♻️ 香港智能, 🔯 香港故转, 🔯 日本故转, 🔯 狮城故转, 🔯 美国故转, ♻️ 日本智能, ♻️ 狮城智能, ♻️ 美国智能, ♻️ 自动选择, 🇭🇰 香港节点, 🇯🇵 日本节点, 🇸🇬 狮城节点, 🇺🇲 美国节点, 🌐 全部节点, DIRECT]}
@@ -137,25 +153,27 @@ proxy-groups:
   - {name: ♻️ 自动选择, type: url-test, include-all: true, tolerance: 20, interval: 300, filter: "^((?!(直连)).)*$"}
   - {name: 🌐 全部节点, type: select, include-all: true}
 
-# 规则匹配
+# ---------------------------------------------------
+# 8. 路由分流规则 (Rules)
+# ---------------------------------------------------
 rules:
-# 1. 特殊域名直连/代理 (最高优先级)
-  - DOMAIN-SUFFIX,doh.pub,🎯 直连
-  - DOMAIN-SUFFIX,dns.alidns.com,🎯 直连
+  # 优先级最高：特殊直连与代理
+  - DOMAIN-SUFFIX,doh.pub,DIRECT
+  - DOMAIN-SUFFIX,dns.alidns.com,DIRECT
   - DOMAIN-SUFFIX,bing.com,🚀 默认代理
   - DOMAIN-SUFFIX,yandex.com,♻️ 美国智能
   - RULE-SET,twitch_domain,🚀 Twitch
-  - RULE-SET,tailscale_domain,🎯 直连
+  - RULE-SET,tailscale_domain,DIRECT
   - RULE-SET,microsoft_cn_domain,🪟 Microsoft_CN
   - RULE-SET,steam_cn_domain,🎮 Steam_CN
   - RULE-SET,steam_domain,🎮 Steam
   - RULE-SET,xbox_domain,🎮 Xbox
   - RULE-SET,supercell_domain,🚀 默认代理
-  - RULE-SET,games_domain,🎯 直连
-# 2. 基础规则 (直连/拒绝)
+  - RULE-SET,games_domain,DIRECT
+  # 基础局域网与广告拦截
   - RULE-SET,private_domain,DIRECT
   - RULE-SET,adblock_domain,REJECT
-# 3. 按服务分流 (中等优先级)
+  # 应用级精细分流
   - RULE-SET,bilibili_domain,📺 Bilibili
   - RULE-SET,ehentai_domain,🔞 E-Hentai
   - RULE-SET,javdb_domain,🔞 Javdb
@@ -172,23 +190,27 @@ rules:
   - RULE-SET,netflix_domain,🎥 NETFLIX
   - RULE-SET,speedtest_domain,✈️ Speedtest
   - RULE-SET,paypal_domain,💶 PayPal
-# 4. 通用代理规则 (较低优先级)
+  # 通用代理与兜底匹配
   - RULE-SET,gfw_domain,🚀 默认代理
   - RULE-SET,geolocation-!cn,🚀 默认代理
-# 5. 国内流量直连 (兜底)
-  - RULE-SET,cn_domain,🎯 直连
-  - RULE-SET,cn_ip,🎯 直连,no-resolve
-# 6. IP类规则 (需no-resolve)
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,cn_ip,DIRECT,no-resolve
+  # 强依赖真实 IP 解析的服务
   - RULE-SET,google_ip,🔍 Google,no-resolve
   - RULE-SET,netflix_ip,🎥 NETFLIX,no-resolve
   - RULE-SET,telegram_ip,📲 Telegram,no-resolve
-# 7. 漏网之鱼
+  # 最后放行
   - MATCH,🐟 漏网之鱼
 
-# 规则集
+# ---------------------------------------------------
+# 9. 规则集映射 (Providers)
+# ---------------------------------------------------
 rule-anchor:
+  # 💡 [排错备忘] 必须显式声明 behavior 字段，否则新版内核启动会报 "unset fields: behavior" 致命错误
   ip: &ip {type: http, interval: 86400, behavior: ipcidr, format: mrs}
   domain: &domain {type: http, interval: 86400, behavior: domain, format: mrs}
+  class: &class {type: http, interval: 86400, behavior: classical, format: text}
+
 rule-providers:
   private_domain: { <<: *domain, url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/private.mrs"}
   ai: {  <<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/category-ai-!cn.mrs" }
@@ -225,5 +247,3 @@ rule-providers:
   google_ip: { <<: *ip, url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/google.mrs"}
   telegram_ip: { <<: *ip, url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/telegram.mrs"}
   netflix_ip: { <<: *ip, url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/netflix.mrs"}
-
- #规则仓库：https://github.com/MetaCubeX/meta-rules-dat/tree/meta
