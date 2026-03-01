@@ -1,0 +1,24 @@
+[Interface]
+ListenPort = 1443
+PostUp = ip route add 172.17.0.0/18 dev eth0 table 128
+PostUp = ip route add default via 172.17.63.253 dev eth0 table 128
+PostUp = ip rule add from 172.17.32.227 table 128 priority 90
+PostUp = iptables -t nat -I POSTROUTING -o wg0 -j MASQUERADE
+PostUp = iptables -I FORWARD -i eth0 -o wg0 -j ACCEPT
+PostUp = iptables -I FORWARD -i wg0 -o eth0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+PreDown = ip rule del from 172.17.32.227 table 128 priority 90 || true
+PreDown = ip route del 172.17.0.0/18 dev eth0 table 128 || true
+PreDown = ip route del default via 172.17.63.253 dev eth0 table 128 || true
+PreDown = iptables -t nat -D POSTROUTING -o wg0 -j MASQUERADE || true
+PreDown = iptables -D FORWARD -i eth0 -o wg0 -j ACCEPT || true
+PreDown = iptables -D FORWARD -i wg0 -o eth0 -m state --state RELATED,ESTABLISHED -j ACCEPT || true
+PrivateKey = 
+Address = 192.168.3.2/32
+DNS = 223.5.5.5
+
+[Peer]
+PublicKey = 
+AllowedIPs = 0.0.0.0/0,192.168.3.1/32,10.10.10.1/24
+Endpoint = 
+PresharedKey = 
+PersistentKeepalive = 25
