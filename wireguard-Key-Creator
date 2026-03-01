@@ -1,0 +1,9 @@
+privkey=$(wg genkey) && \
+pubkey=$(echo "$privkey" | wg pubkey) && \
+psk=$(wg genpsk) && \
+echo -e "\n=== WireGuard 密钥对 ===" && \
+echo "私钥 (Private Key)   : $privkey" && \
+echo "公钥 (Public Key)    : $pubkey" && \
+echo "预共享密钥 (Preshared) : $psk" && \
+echo -e "========================\n"
+#qrencode -t ansiutf8 < client.conf
