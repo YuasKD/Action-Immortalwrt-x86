@@ -12,7 +12,7 @@ AGH_DIR="/opt/AdGuardHome"
 DDNS_GO_DIR="/opt/ddns-go"
 MIHOMO_DIR="/etc/mihomo"
 MIHOMO_BIN="/usr/bin/mihomo"
-ZASHBOARD_DIR="$MIHOMO_DIR/ui/zashboard"
+METACUBEXD_DIR="$MIHOMO_DIR/ui/metacubexd"
 RESOLVED_CONF="/etc/systemd/resolved.conf.d/adguardhome.conf"
 HIJACK_SVC="/etc/systemd/system/agh-dns-hijack.service"
 SYSCTL_CONF="/etc/sysctl.d/99-ag-forward.conf"
@@ -126,7 +126,7 @@ select_cdn() {
     echo -e " 5. 自定义镜像源"
     echo -e ""
     read -p " 请选择 [1-5]: " cdn_choice
-    
+
     case $cdn_choice in
         1)
             CDN_PREFIX=""
@@ -175,12 +175,12 @@ install_agh() {
         echo -e "${RED}下载失败，请检查网络连接。${PLAIN}"
         return
     fi
-    
+
     systemctl stop AdGuardHome > /dev/null 2>&1
-    
+
     tar -zxvf AdGuardHome_linux_amd64.tar.gz -C /opt/ > /dev/null
     rm AdGuardHome_linux_amd64.tar.gz
-    
+
     cd $AGH_DIR
     ./AdGuardHome -s install > /dev/null 2>&1
     systemctl restart AdGuardHome
@@ -189,12 +189,12 @@ install_agh() {
     echo -e "管理面板地址: http://YOUR_IP:3000"
 }
 
-# 2. 安装 Mihomo + Zdashboard
+# 2. 安装 Mihomo + MetaCubeXD
 install_mihomo() {
     echo -e "${BLUE}>>> 准备安装/更新 Mihomo Core...${PLAIN}"
     CPU_ARCH_LEVEL=$(check_cpu_arch)
     echo -e "检测到 CPU 微架构级别: ${GREEN}amd64-${CPU_ARCH_LEVEL}${PLAIN}"
-    
+
     echo -e "请选择 Mihomo 核心版本:"
     echo -e "  1. ${GREEN}官方版${PLAIN} (MetaCubeX/mihomo) - 稳定，通用"
     echo -e "  2. ${YELLOW}Smart版${PLAIN} (vernesong/mihomo)  - 支持 LightGBM 智能分组"
@@ -221,8 +221,8 @@ install_mihomo() {
             jq_filter='select(.name | contains("linux-amd64") and contains("smart") and contains(".gz") and (contains("v2")|not) and (contains("v3")|not))'
             download_url=$(curl -s https://api.github.com/repos/vernesong/mihomo/releases | jq -r ".[0].assets[] | $jq_filter | .browser_download_url" | head -n 1)
         fi
-        
-        # LightGBM Model
+
+        # LightGBM Model (先下载到 /tmp)
         if [ -n "$download_url" ]; then
             echo -e ""
             echo -e "${YELLOW}是否下载/更新 LightGBM Model?${PLAIN}"
@@ -240,8 +240,8 @@ install_mihomo() {
             esac
             if [ -n "$model_src_name" ]; then
                 local model_url="${CDN_PREFIX}https://github.com/vernesong/mihomo/releases/download/LightGBM-Model/$model_src_name"
-                echo -e "${BLUE}正在下载 $model_src_name ...${PLAIN}"
-                wget -O "$MIHOMO_DIR/Model.bin" "$model_url"
+                echo -e "${BLUE}正在下载 $model_src_name 到临时目录...${PLAIN}"
+                wget -O "/tmp/Model.bin" "$model_url"
                 [[ $? -eq 0 ]] && model_downloaded=true || echo -e "${RED}模型下载失败。${PLAIN}"
             fi
         fi
@@ -254,13 +254,13 @@ install_mihomo() {
             jq_filter="select(.name | contains(\"linux-amd64-${CPU_ARCH_LEVEL}\") and contains(\".gz\") and (contains(\"compatible\")|not))"
         fi
         download_url=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r ".assets[] | $jq_filter | .browser_download_url" | head -n 1)
-        
+
         if [ -z "$download_url" ] && [ "$CPU_ARCH_LEVEL" != "v1" ]; then
              jq_filter='select(.name | contains("linux-amd64") and contains(".gz") and (contains("v2")|not) and (contains("v3")|not) and (contains("compatible")|not))'
              download_url=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r ".assets[] | $jq_filter | .browser_download_url" | head -n 1)
         fi
     fi
-    
+
     if [ -z "$download_url" ] || [ "$download_url" == "null" ]; then
         echo -e "${RED}下载链接获取失败。${PLAIN}"
         return
@@ -269,18 +269,27 @@ install_mihomo() {
     # 应用 CDN 前缀
     local final_url="${CDN_PREFIX}${download_url}"
     echo -e "下载链接 (已处理): $final_url"
-    
-    systemctl stop mihomo > /dev/null 2>&1
-    
+
+    echo -e "${BLUE}正在下载 Mihomo 内核到临时目录...${PLAIN}"
     wget -O /tmp/mihomo.gz "$final_url"
     if [ $? -ne 0 ]; then
         echo -e "${RED}下载失败。${PLAIN}"
         return
     fi
 
-    gzip -d /tmp/mihomo.gz
+    # 在不停止服务的情况下解压并赋予权限
+    gzip -df /tmp/mihomo.gz
+    chmod +x /tmp/mihomo
+
+    # 此时文件已准备好，执行快速停止并替换
+    echo -e "${BLUE}正在替换内核与模型文件...${PLAIN}"
+    systemctl stop mihomo > /dev/null 2>&1
+
     mv /tmp/mihomo $MIHOMO_BIN
-    chmod +x $MIHOMO_BIN
+    
+    if [ "$model_downloaded" = true ]; then
+        mv /tmp/Model.bin $MIHOMO_DIR/Model.bin
+    fi
 
     if [ ! -f "$MIHOMO_DIR/config.yaml" ]; then
         echo -e "${YELLOW}生成默认 config.yaml...${PLAIN}"
@@ -291,7 +300,7 @@ allow-lan: true
 mode: rule
 log-level: info
 external-controller: 0.0.0.0:9090
-external-ui: ui/zashboard
+external-ui: ui/metacubexd
 secret: ""
 dns:
   enable: true
@@ -303,7 +312,7 @@ dns:
 EOF
     fi
 
-    install_zdashboard_only "no_restart"
+    install_metacubexd_only "no_restart"
 
     cat > /etc/systemd/system/mihomo.service <<EOF
 [Unit]
@@ -319,19 +328,19 @@ EOF
     systemctl daemon-reload
     systemctl enable mihomo
     systemctl restart mihomo
-    echo -e "${GREEN}Mihomo + Zdashboard 安装/更新完成！${PLAIN}"
+    echo -e "${GREEN}Mihomo + MetaCubeXD 安装/更新完成！${PLAIN}"
     echo -e "Mihomo 面板地址: http://YOUR_IP:9090/ui/"
     if [ "$model_downloaded" = true ]; then
-        echo -e "${YELLOW}提示: 模型已更新。在 config.yaml 中请配置: model: \"Model.bin\"${PLAIN}"
+        echo -e "${YELLOW}提示: 模型已更新。"
     fi
 }
 
 # 3. 安装 ddns-go
 install_ddns_go() {
     echo -e "${BLUE}>>> 开始安装/更新 ddns-go...${PLAIN}"
-    
+
     local download_url=$(curl -s https://api.github.com/repos/jeessy2/ddns-go/releases/latest | jq -r '.assets[] | select(.name | contains("linux_x86_64") and contains(".tar.gz")) | .browser_download_url')
-    
+
     if [ -z "$download_url" ]; then
         echo -e "${RED}无法获取 ddns-go 下载链接。${PLAIN}"
         return
@@ -340,12 +349,12 @@ install_ddns_go() {
     # 应用 CDN 前缀
     local final_url="${CDN_PREFIX}${download_url}"
     echo -e "下载链接 (已处理): $final_url"
-    
+
     systemctl stop ddns-go > /dev/null 2>&1
-    
+
     mkdir -p $DDNS_GO_DIR
     wget -O /tmp/ddns-go.tar.gz "$final_url"
-    
+
     if [ $? -ne 0 ]; then
         echo -e "${RED}下载失败。${PLAIN}"
         return
@@ -353,7 +362,7 @@ install_ddns_go() {
 
     tar -zxvf /tmp/ddns-go.tar.gz -C $DDNS_GO_DIR > /dev/null
     rm /tmp/ddns-go.tar.gz
-    
+
     cd $DDNS_GO_DIR
     ./ddns-go -s install > /dev/null 2>&1
     systemctl restart ddns-go
@@ -364,27 +373,27 @@ install_ddns_go() {
 
 # ================= 辅助 & 卸载 =================
 
-# 辅助: 单独安装 Zdashboard
-install_zdashboard_only() {
+# 辅助: 单独安装 MetaCubeXD
+install_metacubexd_only() {
     mkdir -p $MIHOMO_DIR/ui
     cd /tmp
     # 应用 CDN
-    local dash_url="${CDN_PREFIX}https://github.com/Zephyruso/zashboard/archive/refs/heads/gh-pages.zip"
-    echo -e "${BLUE}正在下载 Zdashboard...${PLAIN}"
-    wget -O zdashboard.zip "$dash_url"
-    
+    local dash_url="${CDN_PREFIX}https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip"
+    echo -e "${BLUE}正在下载 MetaCubeXD...${PLAIN}"
+    wget -O metacubexd.zip "$dash_url"
+
     if [ $? -eq 0 ]; then
-        unzip -o zdashboard.zip > /dev/null
-        rm -rf $ZASHBOARD_DIR
-        mv zashboard-gh-pages $ZASHBOARD_DIR
-        rm zdashboard.zip
-        [ -f "$MIHOMO_DIR/config.yaml" ] && sed -i 's|external-ui:.*|external-ui: ui/zashboard|g' $MIHOMO_DIR/config.yaml
+        unzip -o metacubexd.zip > /dev/null
+        rm -rf $METACUBEXD_DIR
+        mv metacubexd-gh-pages $METACUBEXD_DIR
+        rm metacubexd.zip
+        [ -f "$MIHOMO_DIR/config.yaml" ] && sed -i 's|external-ui:.*|external-ui: ui/metacubexd|g' $MIHOMO_DIR/config.yaml
         if [ "$1" != "no_restart" ]; then
             systemctl restart mihomo
-            echo -e "${GREEN}Zdashboard 已重新部署。${PLAIN}"
+            echo -e "${GREEN}MetaCubeXD 已重新部署。${PLAIN}"
         fi
     else
-        echo -e "${RED}Zdashboard 下载失败。${PLAIN}"
+        echo -e "${RED}MetaCubeXD 下载失败。${PLAIN}"
     fi
 }
 
@@ -409,7 +418,7 @@ manage_dns_hijack() {
     echo -e "功能说明: 强制局域网所有设备使用本机的 AdGuardHome 进行 DNS 解析。"
     echo -e "即便设备手动设置了 8.8.8.8，也会被透明转发到本机 53 端口。"
     echo -e ""
-    
+
     if systemctl is-active --quiet agh-dns-hijack; then
         echo -e "当前状态: ${GREEN}已开启${PLAIN}"
         echo -e " 1. 关闭劫持 (回滚/删除规则)"
@@ -453,7 +462,7 @@ EOF
             systemctl daemon-reload
             systemctl enable agh-dns-hijack
             systemctl start agh-dns-hijack
-            
+
             if systemctl is-active --quiet agh-dns-hijack; then
                 echo -e "${GREEN}DNS 劫持已开启！${PLAIN}"
             else
@@ -471,7 +480,7 @@ manage_ip_forward() {
     echo -e "功能说明: 允许本机在不同网络接口之间转发流量 (充当路由器/网关)。"
     echo -e "如果不开启，连接到本机的设备将无法上网。"
     echo -e ""
-    
+
     local current_state=$(sysctl -n net.ipv4.ip_forward 2>/dev/null)
     if [[ "$current_state" == "1" ]]; then
         echo -e "当前状态: ${GREEN}已开启 (IPv4 & IPv6)${PLAIN}"
@@ -566,22 +575,22 @@ uninstall_ddns_go() {
         systemctl stop ddns-go > /dev/null 2>&1
         systemctl disable ddns-go > /dev/null 2>&1
     fi
-    
+
     echo -e "${RED}是否删除 ddns-go 配置文件和目录 (/opt/ddns-go)? [y/N]${PLAIN}"
     read -p "请输入: " clean_conf
     if [[ "$clean_conf" =~ ^[yY]$ ]]; then
         rm -rf "$DDNS_GO_DIR"
         echo -e "${GREEN}文件已清理。${PLAIN}"
     fi
-    
+
     systemctl daemon-reload
     echo -e "${GREEN}ddns-go 卸载完成。${PLAIN}"
 }
 
-# 单独卸载 Zdashboard
-uninstall_zdashboard() {
-    rm -rf "$ZASHBOARD_DIR"
-    echo -e "${GREEN}Zdashboard 已删除。${PLAIN}"
+# 单独卸载 MetaCubeXD
+uninstall_metacubexd() {
+    rm -rf "$METACUBEXD_DIR"
+    echo -e "${GREEN}MetaCubeXD 已删除。${PLAIN}"
     read -p "重启 Mihomo? (y/n): " rst
     [[ "$rst" == "y" ]] && systemctl restart mihomo
 }
@@ -606,7 +615,7 @@ EOF
 
 check_updates_menu() {
     echo -e "${BLUE}>>> 正在获取 GitHub 最新版本信息，请稍候...${PLAIN}"
-    
+
     # 获取 AdGuardHome 版本
     local agh_local="未安装"
     [ -f "$AGH_DIR/AdGuardHome" ] && agh_local=$($AGH_DIR/AdGuardHome --version 2>/dev/null | head -n 1)
@@ -645,7 +654,7 @@ check_updates_menu() {
     echo -e " c. 更新 ddns-go"
     echo -e " 0. 返回主菜单"
     echo -e ""
-    
+
     read -p " 请输入选项: " up_choice
     case $up_choice in
         a) install_agh; read -p "按回车继续..." ;;
@@ -664,14 +673,14 @@ install_dependencies
 while true; do
     check_status
     echo -e "#############################################################"
-    echo -e "#           全能一键安装脚本 (AGH + Mihomo + DDNS)          #"
+    echo -e "#         全能一键安装脚本 (AGH + Mihomo + DDNS)            #"
     echo -e "#############################################################"
     echo -e "#   CDN 状态: ${CDN_NAME}"
     echo -e "#############################################################"
     echo -e ""
     echo -e " --- 安装选项 ---"
     echo -e " 1. 安装 AdGuardHome             [状态: ${AGH_STATUS}]"
-    echo -e " 2. 安装 Mihomo + Zdashboard     [状态: ${MIHOMO_STATUS}]"
+    echo -e " 2. 安装 Mihomo + MetaCubeXD     [状态: ${MIHOMO_STATUS}]"
     echo -e " 3. 安装 ddns-go                 [状态: ${DDNS_STATUS}]"
     echo -e ""
     echo -e " --- 卸载选项 ---"
@@ -683,7 +692,7 @@ while true; do
     echo -e " 7. 修复 53 端口占用"
     echo -e " 8. 设置/回滚 DNS 53端口劫持     [状态: ${HIJACK_STATUS}]"
     echo -e " 9. 开启/关闭 IP转发(IPv4/v6)    [状态: ${FWD_STATUS}]"
-    echo -e " 10. 单独卸载 Zdashboard"
+    echo -e " 10. 单独卸载 MetaCubeXD"
     echo -e " 11. 检查并更新组件"
     echo -e " 00. 切换/设置 CDN 加速 (推荐开启)"
     echo -e " 0. 退出"
@@ -700,7 +709,7 @@ while true; do
         7) fix_port53 ;;
         8) manage_dns_hijack ;;
         9) manage_ip_forward ;;
-        10) uninstall_zdashboard ;;
+        10) uninstall_metacubexd ;;
         11) check_updates_menu ;;
         00) select_cdn; read -p "按回车继续..." ;;
         0) exit 0 ;;
